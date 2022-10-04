@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Oct  4 21:39:25 2022
+
+@author: alyion
+"""
+import pandas as pd
+import numpy as np
+import math
+from pandas_plink import read_plink
+
+##############################
+#     Function功能設定區域     #
+##############################
+
+def eGFR(sex, scr, age):
+    if math.isnan(scr):
+        return -9
+    else:
+        if sex == 2:
+            return 186 * pow(scr,-1.154) * pow(age, -0.203)
+        elif sex == 1:
+            return 186 * pow(scr,-1.154) * pow(age, -0.203) * 0.742
+        else:
+            return -9
+
+def get_NO_GWAS_SNP(bim ,snp_list ,inpath ,filename):
+    #GWAS QC後晶片上是否有TFBS snp的點
+    qc_gwas_snp =list(bim["snp"])
+    #reverse dict look up查找TFBS snp是否存在於GWAS QC後晶片上，存在給index值，不存在給-1
+    index_dict = dict()
+    reverse_lookup = {x:i for i, x in enumerate(qc_gwas_snp)}
+    for i, x in enumerate(snp_list):
+        index_dict[i] = reverse_lookup.get(x, -1)
+    print(index_dict.values())
+    #輸出為txt檔案
+    num = 0
+    with open(inpath + filename, 'a') as f:
+        for j, k in enumerate(index_dict.values()):
+            if k == -1:
+                num += 1
+                print(snp_list[j])
+                f.write('{}\n'.format(snp_list[j]))
+    print(f"{num} SNPs are not in GWAS chip, output as .txt file")
+
+def get_GWAS_proxy(bim,inpath,filename,outname,inGWASname):
+    snp_nGWAS = []
+    with open(inpath + filename) as f:
+        for line in f.readlines():
+            snp_nGWAS.append(line.rsplit())
+    snp_nGWAS = [item for sublist in snp_nGWAS for item in sublist]
+    SNiPA_df = pd.read_csv(inpath + "❖SNiPA.csv", header = 0)
+    proxy_list = list(SNiPA_df["Proxy"])
+    #check if these proxy are in GWAS chip
+    index_dict = dict()
+    gwas_snp =list(bim["snp"])
+    reverse_lookup = {x:i for i, x in enumerate(gwas_snp)}
+    for i, x in enumerate(proxy_list):
+        index_dict[i] = reverse_lookup.get(x, -1)
+    print(index_dict.values())
+    SNiPA_df["GWAS_index"] = index_dict.values()
+    isGWASProxy = SNiPA_df[['Sentinel','Proxy',"LD r²"]] [SNiPA_df['GWAS_index'] != -1]
+    isGWASProxy = isGWASProxy.sort_values('LD r²').drop_duplicates('Sentinel', keep='last').sort_index()
+    snp_nGWAS_Proxy_dict = dict()
+    for snpID in snp_nGWAS:
+        proxy = str((isGWASProxy.loc[isGWASProxy['Sentinel'] == snpID, 'Proxy']).values).strip("[]'")
+        snp_nGWAS_Proxy_dict.setdefault(snpID, proxy)
+        
+    with open(inpath + outname, 'w') as f:
+        for key in snp_nGWAS_Proxy_dict.keys():
+            f.write("%s,%s\n" % (key, snp_nGWAS_Proxy_dict[key]))
+    
+    snp_GWAS = [item for item in snp_list if item not in snp_nGWAS]
+    with open(inpath + inGWASname, 'a') as f:
+        for m,n in enumerate(snp_GWAS):
+            f.write('{}\n'.format(n))
+
+##################################
+#  讀入TWB Mapping、問卷及檢驗.csv  #
+##################################
+
+#路徑輸入
+filepath = "/Users/alyion/Desktop/TWB_survey_data/"
+#問卷調查讀入
+survey_df = pd.read_csv(filepath + "release_list_survey.csv", header=0)
+survey_df.columns
+#檢驗數據讀入
+measure_df = pd.read_csv(filepath + "release_list_measure.csv", header=0)
+measure_df.columns
+#核對檔讀入
+mapping_df = pd.read_csv(filepath + "Mapping.csv", header=0)
+mapping_df.columns = ["TWB1_ID", "TWB2_ID", "Release_No"]
+
+##################################
+#  合併TWB Mapping、問卷及檢驗.csv  #
+##################################
+
+#合併問卷及檢驗csv，排掉核對不到release_no的樣本
+df = pd.merge(survey_df,measure_df, on = ["Release_No","FOLLOW"], how = "inner")
+#合併核對檔案取得TWB1跟2的ID，全保留
+df = pd.merge(df, mapping_df, on = "Release_No", how = "outer")
+#利用性別、年齡與血清肌酐酸以MDRD方程式獲取eGFR資料
+df["eGFR"] = df.apply(lambda x: eGFR(x["SEX"],x["CREATININE"],x["AGE"]),axis=1)
+#以eGFR60為切點，區分control為1，case為2
+df["eGFR_stage60"] = df["eGFR"].apply(lambda x: -9 if x == -9 else (2 if 0 <= x < 60 else 1))
+pd.crosstab(df["eGFR_stage60"], df["SEX"], margins = True)
+#從合併檔案中取出cov跟pheno資料另存，ID核對完畢彙整後，原TWBID項排除
+covar_df = df[["Release_No","TWB1_ID","TWB2_ID","SEX","AGE","BMI"]]
+pheno_df = df[["Release_No","TWB1_ID","TWB2_ID","eGFR","eGFR_stage60"]]
+covar_df["iid"] = covar_df["TWB1_ID"].combine_first(covar_df["TWB2_ID"])
+pheno_df["iid"] = pheno_df["TWB1_ID"].combine_first(pheno_df["TWB2_ID"])
+covar_df.drop(["TWB1_ID", "TWB2_ID"], 1, inplace=True)
+pheno_df.drop(["TWB1_ID", "TWB2_ID"], 1, inplace=True)
+
+########################
+#   data for GWAS QC   #
+########################
+
+#GWAS路徑
+GWASpath = "/Volumes/LSY_MD/GWAS/combined/116066/"
+
+#讀入bim, fam, bed檔
+(bim, fam, bed) = read_plink(GWASpath + "combined.TWB1.TWB2.high.confidence.v2")
+(bim_1, fam_1, bed_1) = read_plink(GWASpath + "TWB_combine.assoc.logistic")
+
+#製造plink專用pheno檔
+fam1 = pd.merge(fam, pheno_df, on = "iid", how = "inner")
+fam1 = fam1[["fid","iid","father","mother","eGFR","eGFR_stage60"]]
+fam1.columns = ["FID","IID","father","mother","pheno_REG","pheno_CLS"]
+pheno = fam1[["FID","IID","pheno_REG","pheno_CLS"]]
+pheno2 = pheno.drop_duplicates(subset=["FID", "IID"], keep='last')
+with open(GWASpath + "phenotype.txt", 'a') as f:
+    dfAsString = pheno2.to_string(header=True, index=False)
+    f.write(dfAsString)
+    
+#製造plink專用covariate檔
+cov = pd.merge(fam, covar_df, on = "iid", how = "inner")
+cov = cov[["fid","iid","SEX","AGE","BMI"]]
+cov.columns = ["FID","IID","SEX","AGE","BMI"]
+cov["SEX"] = cov["SEX"].apply(lambda x: -9 if pd.isna(x) else int(x))
+cov2 = cov.drop_duplicates(subset=["FID", "IID"], keep='last')
+with open(GWASpath + "covariate.txt", 'a') as f:
+    dfAsString = cov2.to_string(header=True, index=False)
+    f.write(dfAsString)
+
+##############################
+#  compare GWAS & TFBS snps  #
+##############################
+
+inpath = "/Users/alyion/Desktop/TFBS_LSY/"
+
+#讀入TFBS snp串列
+snp_list = []
+path = inpath + '❖SNP_list.txt'
+with open(path) as f:
+    for line in f.readlines():
+        snp_list.append(line.rsplit())
+
+snp_list = [item for sublist in snp_list for item in sublist]
+
+#GWAS QC前晶片上是否有TFBS snp的點
+filename = '❖SNPs_not_in_GWAS.txt'
+get_NO_GWAS_SNP(bim, snp_list, inpath, filename)
+
+
+#GWAS QC後晶片上是否有TFBS snp的點
+qcfilename = '❖SNPs_not_in_qc_GWAS.txt'
+get_NO_GWAS_SNP(bim_1, snp_list, inpath, qcfilename)
+
+#############################
+# find proxy for those snps #
+#############################
+get_GWAS_proxy(bim,inpath,filename,'❖Proxy_for_SNPs_not_in_GWAS.csv','❖SNPs_in_GWAS.txt')
+get_GWAS_proxy(bim_1,inpath,qcfilename,'❖Proxy_for_SNPs_not_in_qcGWAS.csv','❖SNPs_in_qcGWAS.txt')
+    
