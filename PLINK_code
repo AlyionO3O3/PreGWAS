@@ -1,0 +1,1 @@
+plink --bfile combined.TWB1.TWB2.high.confidence.v2 --allow-no-sex --remove-fam remove.txt --geno 0.02 --mind 0.02 --maf 0.05 --hwe 1e-6 --pheno phenotype.txt --pheno-name pheno1_REG --linear --ci 0.95 --covar covariate.txt --covar-name SEX,AGE,BMI,PC1-PC10 --make-bed --out TWB1006CKDlinear
