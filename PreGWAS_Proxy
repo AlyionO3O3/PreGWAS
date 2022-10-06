@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Oct  4 21:39:25 2022
-
 @author: alyion
 """
 import pandas as pd
 import numpy as np
 import math
 from pandas_plink import read_plink
+import matplotlib.pyplot as plt
+import os
 
 ##############################
 #     Function功能設定區域     #
@@ -24,6 +25,17 @@ def eGFR(sex, scr, age):
             return 186 * pow(scr,-1.154) * pow(age, -0.203) * 0.742
         else:
             return -9
+
+def OP(tscore):
+    if math.isnan(tscore):
+        return -9
+    else:
+        if tscore <= -2.5:
+            return 2 #case
+        elif tscore >= -1:
+            return 1 #control
+        else:
+            return -9 #osteopenia
 
 def get_NO_GWAS_SNP(bim ,snp_list ,inpath ,filename):
     #GWAS QC後晶片上是否有TFBS snp的點
@@ -75,43 +87,82 @@ def get_GWAS_proxy(bim,inpath,filename,outname,inGWASname):
     with open(inpath + inGWASname, 'a') as f:
         for m,n in enumerate(snp_GWAS):
             f.write('{}\n'.format(n))
-
-##################################
-#  讀入TWB Mapping、問卷及檢驗.csv  #
-##################################
+            
+#########################
+#  讀入TWB問卷及檢驗.csv  #
+#########################
 
 #路徑輸入
 filepath = "/Users/alyion/Desktop/TWB_survey_data/"
-#問卷調查讀入
-survey_df = pd.read_csv(filepath + "release_list_survey.csv", header=0)
-survey_df.columns
-#檢驗數據讀入
-measure_df = pd.read_csv(filepath + "release_list_measure.csv", header=0)
-measure_df.columns
-#核對檔讀入
-mapping_df = pd.read_csv(filepath + "Mapping.csv", header=0)
-mapping_df.columns = ["TWB1_ID", "TWB2_ID", "Release_No"]
 
-##################################
-#  合併TWB Mapping、問卷及檢驗.csv  #
-##################################
+if os.path.exists(filepath + "TWBtotalsurvey.csv"):
+    df = pd.read_csv(filepath + "TWBtotalsurvey.csv")
+else: #若無合併檔自行製作
+    #問卷調查讀入
+    survey_df = pd.read_csv(filepath + "release_list_survey.csv", header=0)
+    survey_df.columns
+    #檢驗數據讀入
+    measure_df = pd.read_csv(filepath + "release_list_measure.csv", header=0)
+    measure_df.columns
+    #核對檔讀入
+    mapping_df = pd.read_csv(filepath + "Mapping.csv", header=0)
+    mapping_df.columns = ["TWB1_ID", "TWB2_ID", "Release_No"]
+    ##################################
+    #  合併TWB Mapping、問卷及檢驗.csv  #
+    ##################################
+    #合併問卷及檢驗csv，排掉核對不到release_no的樣本
+    df = pd.merge(survey_df,measure_df, on = ["Release_No","FOLLOW"], how = "inner")
+    #合併核對檔案取得TWB1跟2的ID，全保留
+    df = pd.merge(df, mapping_df, on = "Release_No", how = "outer")
+    #輸出.csv
+    df.to_csv(filepath + "TWBtotalsurvey.csv")
 
-#合併問卷及檢驗csv，排掉核對不到release_no的樣本
-df = pd.merge(survey_df,measure_df, on = ["Release_No","FOLLOW"], how = "inner")
-#合併核對檔案取得TWB1跟2的ID，全保留
-df = pd.merge(df, mapping_df, on = "Release_No", how = "outer")
+#############################
+#  phenotype與covariate生成  #
+#############################
+
 #利用性別、年齡與血清肌酐酸以MDRD方程式獲取eGFR資料
 df["eGFR"] = df.apply(lambda x: eGFR(x["SEX"],x["CREATININE"],x["AGE"]),axis=1)
 #以eGFR60為切點，區分control為1，case為2
 df["eGFR_stage60"] = df["eGFR"].apply(lambda x: -9 if x == -9 else (2 if 0 <= x < 60 else 1))
 pd.crosstab(df["eGFR_stage60"], df["SEX"], margins = True)
+#以tscore區分control為1，case為2
+df["OP"] = df.apply(lambda x: OP(x["T_SCORE"]),axis=1)
 #從合併檔案中取出cov跟pheno資料另存，ID核對完畢彙整後，原TWBID項排除
 covar_df = df[["Release_No","TWB1_ID","TWB2_ID","SEX","AGE","BMI"]]
-pheno_df = df[["Release_No","TWB1_ID","TWB2_ID","eGFR","eGFR_stage60"]]
+pheno_df = df[["Release_No","TWB1_ID","TWB2_ID","SEX","eGFR","eGFR_stage60","T_SCORE","OP"]]
 covar_df["iid"] = covar_df["TWB1_ID"].combine_first(covar_df["TWB2_ID"])
 pheno_df["iid"] = pheno_df["TWB1_ID"].combine_first(pheno_df["TWB2_ID"])
 covar_df.drop(["TWB1_ID", "TWB2_ID"], 1, inplace=True)
 pheno_df.drop(["TWB1_ID", "TWB2_ID"], 1, inplace=True)
+
+#######################
+#  匯入PCA、kinship檔  #
+#######################
+
+GWASpath = "/Volumes/LSY_MD/GWAS/combined/116066/"
+pca = pd.read_csv(GWASpath + 'combined.TWB1.TWB2.high.confidence.v2_PCA.txt', sep=" ", header=0)
+kinship = pd.read_csv(GWASpath + 'combined.TWB1.TWB2.high.confidence.v2_Kinship3rdDegree.txt', sep="\t", header=0)
+print(pca.columns)
+print(kinship.columns)
+pca10 = pca[["FID","IID","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]]
+
+#確認kinship值
+plt.figure(figsize=(15, 10), dpi=300)
+plt.hist(kinship["Kinship"], bins=100, range=None, density=None, cumulative=False, histtype='bar', align='mid', orientation='vertical', rwidth=None, color="forestgreen", label=None, stacked=False)
+plt.vlines(0.0442, 0, 5000, color="saddlebrown", label ="Identical or Repeat")
+plt.vlines(0.0884, 0, 5000, color="chocolate", label ="1st Degree")
+plt.vlines(0.177, 0, 5000, color="sandybrown", label ="2nd Degree")
+plt.vlines(0.354, 0, 5000, color="peachpuff", label ="3rd Degree")
+plt.legend(bbox_to_anchor = (1.0, 1), loc = 'best')
+plt.show()
+
+#製造排除三等親名冊
+remove = kinship[['FID', 'IID']]
+remove1 = remove.drop_duplicates()
+with open(GWASpath + "remove.txt", 'a') as f:
+    dfAsString = remove1.to_string(header=True, index=False)
+    f.write(dfAsString)
 
 ########################
 #   data for GWAS QC   #
@@ -125,24 +176,75 @@ GWASpath = "/Volumes/LSY_MD/GWAS/combined/116066/"
 (bim_1, fam_1, bed_1) = read_plink(GWASpath + "TWB_combine.assoc.logistic")
 
 #製造plink專用pheno檔
-fam1 = pd.merge(fam, pheno_df, on = "iid", how = "inner")
-fam1 = fam1[["fid","iid","father","mother","eGFR","eGFR_stage60"]]
-fam1.columns = ["FID","IID","father","mother","pheno_REG","pheno_CLS"]
-pheno = fam1[["FID","IID","pheno_REG","pheno_CLS"]]
-pheno2 = pheno.drop_duplicates(subset=["FID", "IID"], keep='last')
+fam.rename({'fid': 'FID', 'iid': 'IID'}, axis=1, inplace=True)
+pheno_df.rename({'iid': 'IID'}, axis=1, inplace=True)
+fam1 = fam.merge(pheno_df, on = "IID", how = "left")
+fam2 = fam1[["FID","IID","father","mother","SEX","eGFR","eGFR_stage60","T_SCORE","OP"]]
+fam2.columns = ["FID","IID","father","mother","SEX","pheno1_REG","pheno1_CLS","pheno2_REG","pheno2_CLS"]
+pheno = fam2[["FID","IID","pheno1_REG","pheno1_CLS","pheno2_REG","pheno2_CLS"]]
+pheno["pheno1_CLS"] = pheno["pheno1_CLS"].fillna(0).astype('int')
+pheno["pheno2_CLS"] = pheno["pheno2_CLS"].fillna(0).astype('int')
 with open(GWASpath + "phenotype.txt", 'a') as f:
-    dfAsString = pheno2.to_string(header=True, index=False)
+    dfAsString = pheno.to_string(header=True, index=False)
     f.write(dfAsString)
     
 #製造plink專用covariate檔
-cov = pd.merge(fam, covar_df, on = "iid", how = "inner")
-cov = cov[["fid","iid","SEX","AGE","BMI"]]
-cov.columns = ["FID","IID","SEX","AGE","BMI"]
-cov["SEX"] = cov["SEX"].apply(lambda x: -9 if pd.isna(x) else int(x))
-cov2 = cov.drop_duplicates(subset=["FID", "IID"], keep='last')
+covar_df.rename({'iid': 'IID'}, axis=1, inplace=True)
+cov = pd.merge(fam, covar_df, on = "IID", how = "inner")
+cov.rename({'fid': 'FID'}, axis=1, inplace=True)
+cov1 = pd.merge(cov, pca10, on = ["FID","IID"], how = "inner")
+cov2 = cov1[["FID","IID","SEX","AGE","BMI"]]
+cov2.columns = ["FID","IID","SEX","AGE","BMI"]
+cov2["SEX"] = cov2["SEX"].apply(lambda x: -9 if pd.isna(x) else int(x))
+cov3 = cov2.drop_duplicates(subset=["FID", "IID"], keep='last')
+cov4 = pd.merge(cov3, pca10, on = ["FID","IID"], how = "outer")
+cov4["SEX"] = cov4["SEX"].fillna(0).astype('int')
 with open(GWASpath + "covariate.txt", 'a') as f:
-    dfAsString = cov2.to_string(header=True, index=False)
+    dfAsString = cov4.to_string(header=True, index=False)
     f.write(dfAsString)
+
+
+#將性別回併回fam檔
+newfam = pd.merge(fam, fam1[['FID', 'IID', 'SEX']], on=['FID', 'IID'], how='left')
+newfam["SEX"] = newfam["SEX"].fillna(0).astype('int')
+newfam = newfam.drop_duplicates(subset=["FID", "IID"], keep='last')
+newfam2 = newfam[["FID","IID","father",'mother',"SEX","trait","i"]]
+with open(GWASpath + "combined.TWB1.TWB2.high.confidence.v2.fam", 'a') as f:
+    dfAsString = newfam.to_string(header=0, index=False)
+    f.write(dfAsString)
+
+#繪製PCA
+phecov = pd.merge(cov4, pheno, on=['FID', 'IID'], how='inner')
+ctrlPCx = phecov["PC1"][(phecov.pheno1_CLS == 1)]
+ctrlPCy = phecov["PC2"][(phecov.pheno1_CLS == 1)]
+casePCx = phecov["PC1"][(phecov.pheno1_CLS == 2)]
+casePCy = phecov["PC2"][(phecov.pheno1_CLS == 2)]
+plt.figure(figsize=(15, 15), dpi=300)
+plt.scatter(ctrlPCx, ctrlPCy, edgecolors='orange', facecolors='none', s=80, label='control')
+plt.scatter(casePCx, casePCy, edgecolors='green', facecolors='none', s=80, label='case')
+#plt.xticks(range(2008, 2020, 1))
+#plt.yticks(range(0, 3200, 200))
+plt.xlabel("PC1", fontdict={'size': 16})
+plt.ylabel("PC2", fontdict={'size': 16})
+plt.title("Scores of PCA for CKD GWAS", fontdict={'size': 20})
+plt.legend(loc='best', fontsize=16)
+plt.show()
+
+phecov = pd.merge(cov4, pheno, on=['FID', 'IID'], how='inner')
+ctrlPCx = phecov["PC1"][(phecov.pheno2_CLS == 1)]
+ctrlPCy = phecov["PC2"][(phecov.pheno2_CLS == 1)]
+casePCx = phecov["PC1"][(phecov.pheno2_CLS == 2)]
+casePCy = phecov["PC2"][(phecov.pheno2_CLS == 2)]
+plt.figure(figsize=(15, 15), dpi=300)
+plt.scatter(ctrlPCx, ctrlPCy, edgecolors='violet', facecolors='none', s=80, label='control')
+plt.scatter(casePCx, casePCy, edgecolors='skyblue', facecolors='none', s=80, label='case')
+#plt.xticks(range(2008, 2020, 1))
+#plt.yticks(range(0, 3200, 200))
+plt.xlabel("PC1", fontdict={'size': 16})
+plt.ylabel("PC2", fontdict={'size': 16})
+plt.title("Scores of PCA for Osteoporosis GWAS", fontdict={'size': 20})
+plt.legend(loc='best', fontsize=16)
+plt.show()
 
 ##############################
 #  compare GWAS & TFBS snps  #
@@ -173,4 +275,3 @@ get_NO_GWAS_SNP(bim_1, snp_list, inpath, qcfilename)
 #############################
 get_GWAS_proxy(bim,inpath,filename,'❖Proxy_for_SNPs_not_in_GWAS.csv','❖SNPs_in_GWAS.txt')
 get_GWAS_proxy(bim_1,inpath,qcfilename,'❖Proxy_for_SNPs_not_in_qcGWAS.csv','❖SNPs_in_qcGWAS.txt')
-    
