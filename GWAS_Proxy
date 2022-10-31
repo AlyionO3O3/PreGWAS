@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct 13 01:37:45 2022
+
+@author: alyion
+"""
+import pandas as pd
+#from pandas_plink import read_plink
+
+##############################
+#     Function功能設定區域     #
+##############################
+
+def get_NO_GWAS_SNP(bim ,snp_list ,inpath ,filename):
+    # GWAS QC後晶片上是否有TFBS snp的點
+    qc_gwas_snp =list(bim["snp"])
+    # reverse dict look up查找TFBS snp是否存在於GWAS QC後晶片上，存在給index值，不存在給-1
+    index_dict = {}
+    reverse_lookup = {x:i for i, x in enumerate(qc_gwas_snp)}
+    for i, x in enumerate(snp_list):
+        index_dict[i] = reverse_lookup.get(x, -1)
+    print(index_dict.values())
+    # 輸出為txt檔案
+    num = 0
+    with open(inpath + filename, 'a') as f:
+        for j, k in enumerate(index_dict.values()):
+            if k == -1:
+                num += 1
+                print(snp_list[j])
+                f.write('{}\n'.format(snp_list[j]))
+    print(f"{num} SNPs are not in GWAS chip, output as .txt file")
+
+def get_GWAS_proxy(bim,inpath,filename,outname,inGWASname):
+    snp_nGWAS = []
+    with open(inpath + filename) as f:
+        for line in f.readlines():
+            snp_nGWAS.append(line.rsplit())
+    snp_nGWAS = [item for sublist in snp_nGWAS for item in sublist]
+    SNiPA_df = pd.read_csv(inpath + "❖SNiPA.csv", header = 0)
+    proxy_list = list(SNiPA_df["Proxy"])
+    # check if these proxy are in GWAS chip
+    index_dict = {}
+    gwas_snp =list(bim["snp"])
+    reverse_lookup = {x:i for i, x in enumerate(gwas_snp)}
+    for i, x in enumerate(proxy_list):
+        index_dict[i] = reverse_lookup.get(x, -1)
+    print(index_dict.values())
+    SNiPA_df["GWAS_index"] = index_dict.values()
+    isGWASProxy = SNiPA_df[['Sentinel','Proxy',"LD r²"]] [SNiPA_df['GWAS_index'] != -1]
+    isGWASProxy = isGWASProxy.sort_values('LD r²').drop_duplicates('Sentinel', keep='last').sort_index()
+    snp_nGWAS_Proxy_dict = {}
+    for snpID in snp_nGWAS:
+        proxy = str((isGWASProxy.loc[isGWASProxy['Sentinel'] == snpID, 'Proxy']).values).strip("[]'")
+        snp_nGWAS_Proxy_dict.setdefault(snpID, proxy)
+    
+    with open(inpath + outname, 'w') as f:
+        for key in snp_nGWAS_Proxy_dict.keys():
+            f.write("%s,%s\n" % (key, snp_nGWAS_Proxy_dict[key]))
+    snp_GWAS = [item for item in snp_list if item not in snp_nGWAS]
+    
+    with open(inpath + inGWASname, 'a') as f:
+        for m,n in enumerate(snp_GWAS):
+            f.write('{}\n'.format(n))
+            
+    snp_set_2 = []
+    for i in  snp_nGWAS_Proxy_dict.keys():
+        if snp_nGWAS_Proxy_dict[i]:
+            snp_set_2.append(snp_nGWAS_Proxy_dict[i])
+        
+    snp_set_2.extend(snp_GWAS)
+    
+    with open(inpath + "❖SNP_SET_2.txt", 'a') as f:
+        for m,n in enumerate(snp_set_2):
+            f.write('{}\n'.format(n))
+
+##############################
+#  compare GWAS & TFBS snps  #
+##############################
+# 檔案讀取路徑
+inpath = "/Users/alyion/Desktop/TFBS_LSY/"
+# GWAS路徑
+GWASpath = "/Volumes/LSY_MD/GWAS/BaseGWAS/"
+
+# 讀入bim, fam, bed檔
+#(bim, fam, bed) = read_plink(GWASpath + "combined.TWB1.TWB2.high.confidence.v2")
+#(bim_1, fam_1, bed_1) = read_plink(GWASpath + "GWASBASE")
+bim_1 = pd.read_csv(GWASpath + "GWASBASE")
+#讀入TFBS snp串列
+snp_list = []
+path = inpath + '❖SNP_list.txt'
+with open(path) as f:
+    for line in f.readlines():
+        snp_list.append(line.rsplit())
+
+snp_list = [item for sublist in snp_list for item in sublist]
+
+#GWAS QC前晶片上是否有TFBS snp的點
+#filename = '❖SNPs_not_in_GWAS.txt'
+#get_NO_GWAS_SNP(bim, snp_list, inpath, filename)
+
+
+#GWAS QC後晶片上是否有TFBS snp的點
+qcfilename = '❖SNPs_not_in_qc_GWAS.txt'
+get_NO_GWAS_SNP(bim_1, snp_list, inpath, qcfilename)
+
+#############################
+# find proxy for those snps #
+#############################
+
+#get_GWAS_proxy(bim,inpath,filename,'❖Proxy_for_SNPs_not_in_GWAS.csv','❖SNPs_in_GWAS.txt')
+get_GWAS_proxy(bim_1,inpath,qcfilename,'❖Proxy_for_SNPs_not_in_qcGWAS.csv','❖SNPs_in_qcGWAS.txt')
