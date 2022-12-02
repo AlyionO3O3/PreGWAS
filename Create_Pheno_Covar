@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Nov 30 00:15:10 2022
+
+@author: alyion
+"""
+import pandas as pd
+import numpy as np
+import math
+from tqdm import tqdm
+import random
+tqdm.pandas()
+
+# This code is for TWB survey data cleansing in order to conduct further GWAS analysis
+# 5 files are needed, column names may differ from time to time
+
+class TWBcleaning():
+    def __init__(self, filepath, gwaspath, survey_df, measure_df, mapping_df, kinship, pca, fam_df):
+        self.filepath = filepath
+        self.gwaspath = gwaspath
+        print("Loading TWB survey data...")
+        self.survey_df = pd.read_csv(self.filepath + survey_df, header=0)
+        print("Loading TWB measure data...")
+        self.measure_df = pd.read_csv(self.filepath + measure_df, header=0)
+        print("Loading TWB mapping data...")
+        self.mapping_df = pd.read_csv(self.filepath + mapping_df, header=0)
+        print("Loading TWB kinship data...")
+        self.kinship = pd.read_csv(self.gwaspath + kinship, sep="\t", header=0)
+        print("Loading TWB PCA data...")
+        self.pca = pd.read_csv(self.gwaspath + pca, sep="\t", header=0)
+        print("Loading TWB GWAS fam file...")
+        self.fam_df = pd.read_csv(self.gwaspath + fam_df, header=None, delimiter=" ")
+        self.create_ID_Batch_dict()
+        self.KINSHIP_to_Remove()
+        self.merge3file()
+        self.PCA_10()
+        self.create_Phenos()
+        self.FAMindex()
+        
+    def eGFR(self, sex, scr, age):
+        if math.isnan(scr):
+            return np.NaN
+        else:
+            if sex == 2:
+                return 186 * pow(scr,-1.154) * pow(age, -0.203) * 0.742
+            elif sex == 1:
+                return 186 * pow(scr,-1.154) * pow(age, -0.203)
+            else:
+                return np.NaN
+    
+    def OP(self, tscore):
+        if math.isnan(tscore):
+            return np.NaN
+        else:
+            if tscore <= -2.5:
+                return 2 # case
+            elif tscore >= -1:
+                return 1 # control
+            else:
+                return np.NaN # osteopenia
+            
+    def UACR(self, UmiALB,Ucr):
+        if math.isnan(UmiALB) or math.isnan(Ucr):
+            return np.NaN
+        else:
+            return (UmiALB*100)/Ucr
+    
+    def CKD(self, egfr, uacr):
+        if math.isnan(egfr) or math.isnan(uacr):
+            return np.NaN
+        elif egfr < 60 and uacr >= 30:
+            return 2
+        else:
+            return 1
+        
+    def DN(self, diabete, CKD):
+        if math.isnan(diabete) or math.isnan(CKD):
+            return np.NaN
+        elif diabete == 1 and CKD == 2:
+            return 2
+        else:
+            return 1
+        
+    def TOCSV(self, df, path, name):
+        chunks = np.array_split(df.index, 100)
+        for chunck, subset in enumerate(tqdm(chunks)):
+            if chunck == 0: # first row
+                df.loc[subset].to_csv(path + name, mode='w', index=True)
+            else:
+                df.loc[subset].to_csv(path + name, header=None, mode='a', index=True)
+                
+    def TOTXT(self, df, path, name, h = True):
+        chunks = np.array_split(df.index, 100)
+        for chunck, subset in enumerate(tqdm(chunks)):
+            if chunck == 0: # first row
+                df.loc[subset].to_csv(path + name, mode='w', header=h, index=None, sep=' ')
+            else:
+                df.loc[subset].to_csv(path + name, header=None, mode='a', index=None, sep=' ')
+    
+    def create_ID_Batch_dict(self):
+        self.mapping_df["iid"] = self.mapping_df["TWB1_ID"].combine_first(self.mapping_df["TWB2_ID"])
+        self.mapping_df["batch"] = self.mapping_df["TWB1_Batch"].combine_first(self.mapping_df["TWB2_Batch"])
+        ID_batch_df = self.mapping_df[["Release_No","iid","batch"]]
+        ID_batch_df.set_index("Release_No", drop=True, inplace=True)
+        ID_batch_df.dropna(subset = "iid", inplace = True)
+        self.ID_batch_dict = ID_batch_df.to_dict(orient="index")
+        print("create_ID_Batch_dict done!")
+    
+    def KINSHIP_to_Remove(self):            
+        self.remove_df = pd.DataFrame(columns=["FID","IID"])
+        remove_k = self.kinship[['FID', 'IID']]
+        self.remove_df = self.remove_df.append(remove_k, ignore_index=True)
+        self.remove_df = self.remove_df.drop_duplicates()
+        print("Creating remove.txt...")
+        self.TOTXT(self.remove_df, self.filepath, 'remove.txt')
+        print("KINSHIP_to_Remove done!")
+    
+    def merge3file(self):
+        print("Start merging survey and measure file...")
+        self.TWB_df = pd.merge(self.survey_df, self.measure_df, on = ["Release_No","FOLLOW","PROJECT",'SURVEY_DATE','CRF_NAME_QN'], how = "outer")
+        self.TWB_df["iid"] = self.TWB_df.Release_No.map(pd.DataFrame(self.ID_batch_dict).iloc[0])
+        self.TWB_df["batch"] = self.TWB_df.Release_No.map(pd.DataFrame(self.ID_batch_dict).iloc[1])
+        print("Creating TWBmergeall.csv...")
+        self.TOCSV(self.TWB_df, self.filepath, 'TWBmergeall.csv')
+        print("merge3file done!")
+        
+    def PCA_10(self):
+        self.pca10 = self.pca[["FID","IID","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]]
+    
+    def create_Phenos(self):
+        print("Creating phenotypes!")
+        print("calculating eGFR...")
+        self.TWB_df["eGFR"] = self.TWB_df.progress_apply(lambda x: self.eGFR(x["SEX"],x["CREATININE"],x["AGE"]),axis=1)
+        print("Finish calculating eGFR, now grouping OP...")
+        self.TWB_df["OP"] = self.TWB_df.progress_apply(lambda x: self.OP(x["T_SCORE"]),axis=1)
+        print("Finish grouping OP, now grouping eGFR setting cutoff at 60...")
+        self.TWB_df["eGFR_stage60"] = self.TWB_df["eGFR"].progress_apply(lambda x: np.NaN if math.isnan(x) == True else (2 if x < 60 else 1))
+        print("Finish grouping eGFR, now cleaning miALB and UCR...")
+        self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace(',',''))
+        self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace('<',''))
+        self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace('>',''))
+        self.TWB_df.MICROALB = self.TWB_df.MICROALB.astype(float)
+        self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.progress_apply(lambda x: str(x).replace(',',''))
+        self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.progress_apply(lambda x: str(x).replace('<',''))
+        self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.progress_apply(lambda x: str(x).replace('>',''))
+        self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.astype(float)
+        print("Finish cleaning miALB and UCR, now calculating UACR...")
+        self.TWB_df["UACR"] = self.TWB_df.progress_apply(lambda x: self.UACR(x["MICROALB"],x["CREATININE_URINE"]),axis = 1)
+        print("Finish calculating UACR, now using KDIGO classifying CKD...")
+        self.TWB_df["CKD_KDIGO"] = self.TWB_df.progress_apply(lambda x: self.CKD(x["eGFR_stage60"],x["UACR"]),axis = 1)
+        print("Finish classifying CKD, no classifying DN...")
+        self.TWB_df["DN"] = self.TWB_df.progress_apply(lambda x: self.DN(x["DIABETES_SELF"],x["CKD_KDIGO"]),axis = 1)
+        print("All phenotypes done!")
+        print("Dropping empty and duplicate IIDs...")
+        self.TWB_df = self.TWB_df.sort_values('FOLLOW')
+        self.TWB_df = self.TWB_df.dropna(subset='iid')
+        self.TWB_df.drop_duplicates(subset="iid", keep="last", inplace = True)
+        self.pheno_df = self.TWB_df[["iid", "batch","FOLLOW","SEX","BMI","AGE","T_SCORE","OP","CREATININE","MICROALB","CREATININE_URINE","RENAL_FAILURE_SELF", "DIABETES_SELF","UACR", "eGFR_stage60", "CKD_KDIGO", "DN"]]
+        self.TOCSV(self.pheno_df, self.filepath, 'Pheno.csv')
+    
+    def FAMindex(self):
+        self.fam_df.columns = ["FID","IID","father","mother","sex","pheno"]
+        self.index_df = self.fam_df[["FID","IID"]]
+        
+    def update_FAM(self):
+        while True:
+            phenos = str(list(self.pheno_df.columns)[3:]).replace("]", "").replace("[", "").replace("'", "")
+            print(phenos)
+            PHENO = input("Which pheno do you want to update for your fam file: ")
+            if PHENO in self.pheno_df.columns:
+                pheno_for_fam = self.pheno_df[["iid", PHENO]]
+                pheno_for_fam.columns = ["IID","Pheno"]
+                self.fam_df = self.fam_df[["FID","IID","father","mother","sex"]]
+                self.fam_df = pd.merge(self.fam_df, pheno_for_fam, on = "IID", how = "left")
+                self.fam_df["Pheno"] = self.fam_df["Pheno"].fillna(-9).astype('int')
+                print("Updating phenotype.fam...")
+                self.TOTXT(self.fam_df, self.filepath, "combined.TWB1.TWB2.high.confidence.v3.fam",False)
+                break
+            print("Invalid phenotype!")
+        
+    def create_COVs(self):
+        print("Extracting covariates from pheno_df...")
+        self.cov_df = self.pheno_df[["iid","batch","SEX","BMI","AGE"]]
+        self.cov_df.columns = ["IID","batch","SEX","BMI","AGE"]
+        self.cov_df = pd.merge(self.index_df, self.cov_df, on = ["IID"], how = "left")
+        self.cov_df = pd.merge(self.cov_df, self.pca10, on = ["FID","IID"], how = "left")
+        self.cov_df.dropna(inplace=True)
+        print("Creating covariate.txt...")
+        self.TOTXT(self.cov_df, self.filepath, "covariate.txt")
+
+    def random_sampling(self):
+        print("Start random process...")
+        random.seed(10)
+        keep_df = self.fam_df[~self.fam_df.IID.isin(self.remove_df.IID)]
+        print(keep_df.Pheno.value_counts())
+        n_case = input("According to total sample size above, how many cases do you need to sample: ")
+        n_control = input("How many controls do you need to sample: ")
+        print("Sampling target set...")
+        targetcase = keep_df.IID[keep_df.Pheno==2].sample(n=int(n_case), random_state=1).tolist()
+        targetcontrol = keep_df.IID[keep_df.Pheno==1].sample(n=int(n_control), random_state=1).tolist()
+        targetID = []
+        targetID.extend(targetcase)
+        targetID.extend(targetcontrol)
+        targetID_df = pd.DataFrame({"FID":targetID,"IID":targetID},columns=["FID","IID"])
+        print("Creating targetID.txt...")
+        self.TOTXT(targetID_df, self.filepath, "targetID.txt")
+        print("Sampling base set...")
+        baseID = keep_df.IID[~keep_df.IID.isin(targetID)].tolist()
+        baseID_df = pd.DataFrame({"FID":baseID,"IID":baseID},columns=["FID","IID"])
+        print("Creating baseID.txt...")
+        self.TOTXT(baseID_df, self.filepath, "baseID.txt")
+        
+def main():
+    TWB20221202 = TWBcleaning("/Volumes/LSY_MD/❖論文專區❖/5.Thesis final/Data/TWB20221129/","/Volumes/LSY_MD/❖論文專區❖/5.Thesis final/Data/TWBGWAS_130K/","release_list_survey.csv","release_list_measure.csv","lab_info.csv",'combined.TWB1.TWB2.high.confidence.v3.kinship.txt','combined.TWB1.TWB2.high.confidence.v3.PCA.txt',"combined.TWB1.TWB2.high.confidence.v3.fam")
+    TWB20221202.update_FAM()
+    TWB20221202.create_COVs()
+    TWB20221202.random_sampling()
+    
+if __name__ == "__main__": main()
