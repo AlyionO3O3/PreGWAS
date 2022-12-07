@@ -13,7 +13,7 @@ import random
 tqdm.pandas()
 
 # This code is for TWB survey data cleansing in order to conduct further GWAS analysis
-# 5 files are needed, column names may differ from time to time
+# 6 files are needed, column names may differ from time to time
 
 class TWBcleaning():
     def __init__(self, filepath, gwaspath, survey_df, measure_df, mapping_df, kinship, pca, fam_df):
@@ -35,6 +35,7 @@ class TWBcleaning():
         self.KINSHIP_to_Remove()
         self.merge3file()
         self.PCA_10()
+        self.BorF()
         self.create_Phenos()
         self.FAMindex()
         
@@ -60,6 +61,23 @@ class TWBcleaning():
             else:
                 return np.NaN # osteopenia
             
+    def OPe(self, tscore):
+        if math.isnan(tscore):
+            return np.NaN
+        else:
+            if tscore <= -1:
+                return 1 # control
+            else:
+                return 2 # osteopenia
+    
+    def OA(self, arthritis, arth_self, arth_kind):
+        if math.isnan(arthritis):
+            return np.NaN
+        elif arth_self == 1 & ("退化" in str(arth_kind)):
+            return 2
+        else:
+            return 1 #control
+        
     def UACR(self, UmiALB,Ucr):
         if math.isnan(UmiALB) or math.isnan(Ucr):
             return np.NaN
@@ -128,13 +146,28 @@ class TWBcleaning():
     def PCA_10(self):
         self.pca10 = self.pca[["FID","IID","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]]
     
+    def BorF(self):
+        ans = input("Keeping only Baseline or Follow? (B/F/N): ")
+        if ans == "N":
+            print("Keeping both baseline and follow samples...")
+        elif ans == "B":
+            print("Dropping follow...")
+            self.TWB_df = self.TWB_df[self.TWB_df.FOLLOW != "Follow 1"]
+        else:
+            print("Dropping baseline...")
+            self.TWB_df = self.TWB_df[self.TWB_df.FOLLOW != "Baseline"]
+    
     def create_Phenos(self):
         print("Creating phenotypes!")
         print("calculating eGFR...")
         self.TWB_df["eGFR"] = self.TWB_df.progress_apply(lambda x: self.eGFR(x["SEX"],x["CREATININE"],x["AGE"]),axis=1)
-        print("Finish calculating eGFR, now grouping OP...")
+        print("Finish calculating eGFR, now grouping OPe...")
+        self.TWB_df["OPe"] = self.TWB_df.progress_apply(lambda x: self.OPe(x["T_SCORE"]),axis=1)
+        print("Finish grouping OPe, now grouping OP...")
         self.TWB_df["OP"] = self.TWB_df.progress_apply(lambda x: self.OP(x["T_SCORE"]),axis=1)
-        print("Finish grouping OP, now grouping eGFR setting cutoff at 60...")
+        print("Finish grouping OP, now grouping OA...")
+        self.TWB_df["OA"] = self.TWB_df.apply(lambda x: self.OA(x["ARTHRITIS"],x["ARTHRITIS_SELF"],x["ARTHRITIS_SELF_KIND"]),axis=1)
+        print("Finish grouping OA, now grouping eGFR setting cutoff at 60...")
         self.TWB_df["eGFR_stage60"] = self.TWB_df["eGFR"].progress_apply(lambda x: np.NaN if math.isnan(x) == True else (2 if x < 60 else 1))
         print("Finish grouping eGFR, now cleaning miALB and UCR...")
         self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace(',',''))
@@ -156,7 +189,7 @@ class TWBcleaning():
         self.TWB_df = self.TWB_df.sort_values('FOLLOW')
         self.TWB_df = self.TWB_df.dropna(subset='iid')
         self.TWB_df.drop_duplicates(subset="iid", keep="last", inplace = True)
-        self.pheno_df = self.TWB_df[["iid", "batch","FOLLOW","SEX","BMI","AGE","T_SCORE","OP","CREATININE","MICROALB","CREATININE_URINE","RENAL_FAILURE_SELF", "DIABETES_SELF","UACR", "eGFR_stage60", "CKD_KDIGO", "DN"]]
+        self.pheno_df = self.TWB_df[["iid", "batch","FOLLOW","SEX","BMI","AGE","T_SCORE","OPe","OP","CREATININE","MICROALB","CREATININE_URINE","RENAL_FAILURE_SELF", "DIABETES_SELF","UACR", "eGFR_stage60", "CKD_KDIGO", "DN"]]
         self.TOCSV(self.pheno_df, self.filepath, 'Pheno.csv')
     
     def FAMindex(self):
@@ -212,7 +245,7 @@ class TWBcleaning():
         self.TOTXT(baseID_df, self.filepath, "baseID.txt")
         
 def main():
-    TWB20221202 = TWBcleaning("/Volumes/LSY_MD/❖論文專區❖/5.Thesis final/Data/TWB20221129/","/Volumes/LSY_MD/❖論文專區❖/5.Thesis final/Data/TWBGWAS_130K/","release_list_survey.csv","release_list_measure.csv","lab_info.csv",'combined.TWB1.TWB2.high.confidence.v3.kinship.txt','combined.TWB1.TWB2.high.confidence.v3.PCA.txt',"combined.TWB1.TWB2.high.confidence.v3.fam")
+    TWB20221202 = TWBcleaning("/Volumes/Untitled/TWB20221129/","/Volumes/Untitled/TWBGWAS_130K/","release_list_survey.csv","release_list_measure.csv","lab_info.csv",'combined.TWB1.TWB2.high.confidence.v3.kinship.txt','combined.TWB1.TWB2.high.confidence.v3.PCA.txt',"combined.TWB1.TWB2.high.confidence.v3.fam")
     TWB20221202.update_FAM()
     TWB20221202.create_COVs()
     TWB20221202.random_sampling()
