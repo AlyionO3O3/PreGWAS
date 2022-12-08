@@ -19,24 +19,34 @@ class TWBcleaning():
     def __init__(self, filepath, gwaspath, survey_df, measure_df, mapping_df, kinship, pca, fam_df):
         self.filepath = filepath
         self.gwaspath = gwaspath
-        print("Loading TWB survey data...")
+        print("\n>>Loading TWB survey data...")
         self.survey_df = pd.read_csv(self.filepath + survey_df, header=0)
-        print("Loading TWB measure data...")
+        print("\n>>Loading TWB measure data...")
         self.measure_df = pd.read_csv(self.filepath + measure_df, header=0)
-        print("Loading TWB mapping data...")
+        print("\n>>Loading TWB mapping data...")
         self.mapping_df = pd.read_csv(self.filepath + mapping_df, header=0)
-        print("Loading TWB kinship data...")
+        print("\n>>Loading TWB kinship data...")
         self.kinship = pd.read_csv(self.gwaspath + kinship, sep="\t", header=0)
-        print("Loading TWB PCA data...")
+        print("\n>>Loading TWB PCA data...")
         self.pca = pd.read_csv(self.gwaspath + pca, sep="\t", header=0)
-        print("Loading TWB GWAS fam file...")
+        print("\n>>Loading TWB GWAS fam file...")
         self.fam_df = pd.read_csv(self.gwaspath + fam_df, header=None, delimiter=" ")
         self.create_ID_Batch_dict()
         self.KINSHIP_to_Remove()
-        self.merge3file()
+        YN = input("\n>>Do you need to merge TWB file?\n(Make sure your merged file locates in your path and file named as TWBmergeall.csv) (Y/N): ")
+        if YN == "Y":
+            self.merge3file()
+        else:
+            print("\n>>Loading TWB merge file...")
+            self.TWB_df = pd.read_csv(self.filepath + "TWBmergeall.csv", header=0)
         self.PCA_10()
         self.BorF()
-        self.create_Phenos()
+        YN = input("\n>>Do you need to create Pheno.csv?\n(Make sure your pheno file locates in your path and file named as Pheno.csv) (Y/N): ")
+        if YN == "Y":
+            self.create_Phenos()
+        else:
+            print("\n>>Loading pheno file...")
+            self.pheno_df = pd.read_csv(self.filepath + "Pheno.csv", header=0)
         self.FAMindex()
         
     def eGFR(self, sex, scr, age):
@@ -65,18 +75,25 @@ class TWBcleaning():
         if math.isnan(tscore):
             return np.NaN
         else:
-            if tscore <= -1:
+            if tscore >= -1:
                 return 1 # control
+            elif tscore <= -2.5:
+                return np.NaN 
             else:
                 return 2 # osteopenia
     
     def OA(self, arthritis, arth_self, arth_kind):
         if math.isnan(arthritis):
             return np.NaN
-        elif arth_self == 1 & ("退化" in str(arth_kind)):
-            return 2
-        else:
+        elif arthritis == 1 & math.isnan(arth_self):
             return 1 #control
+        elif arthritis == 0:
+            return 1 #control
+        elif arth_self == 1 & ("退化" in str(arth_kind)):
+            return 2 #case
+        else:
+            return 0 #other arthritis
+        
         
     def UACR(self, UmiALB,Ucr):
         if math.isnan(UmiALB) or math.isnan(Ucr):
@@ -123,53 +140,53 @@ class TWBcleaning():
         ID_batch_df.set_index("Release_No", drop=True, inplace=True)
         ID_batch_df.dropna(subset = "iid", inplace = True)
         self.ID_batch_dict = ID_batch_df.to_dict(orient="index")
-        print("create_ID_Batch_dict done!")
+        print("\n>>create_ID_Batch_dict done!")
     
     def KINSHIP_to_Remove(self):            
         self.remove_df = pd.DataFrame(columns=["FID","IID"])
         remove_k = self.kinship[['FID', 'IID']]
         self.remove_df = self.remove_df.append(remove_k, ignore_index=True)
         self.remove_df = self.remove_df.drop_duplicates()
-        print("Creating remove.txt...")
+        print("\n>>Creating remove.txt...")
         self.TOTXT(self.remove_df, self.filepath, 'remove.txt')
-        print("KINSHIP_to_Remove done!")
+        print("\n>>KINSHIP_to_Remove done!")
     
     def merge3file(self):
-        print("Start merging survey and measure file...")
+        print("\n>>Start merging survey and measure file...")
         self.TWB_df = pd.merge(self.survey_df, self.measure_df, on = ["Release_No","FOLLOW","PROJECT",'SURVEY_DATE','CRF_NAME_QN'], how = "outer")
         self.TWB_df["iid"] = self.TWB_df.Release_No.map(pd.DataFrame(self.ID_batch_dict).iloc[0])
         self.TWB_df["batch"] = self.TWB_df.Release_No.map(pd.DataFrame(self.ID_batch_dict).iloc[1])
-        print("Creating TWBmergeall.csv...")
+        print("\n>>Creating TWBmergeall.csv...")
         self.TOCSV(self.TWB_df, self.filepath, 'TWBmergeall.csv')
-        print("merge3file done!")
+        print("\n>>merge3file done!")
         
     def PCA_10(self):
         self.pca10 = self.pca[["FID","IID","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"]]
     
     def BorF(self):
-        ans = input("Keeping only Baseline or Follow? (B/F/N): ")
+        ans = input("\n>>Keeping only Baseline or Follow? (B/F/N): ")
         if ans == "N":
-            print("Keeping both baseline and follow samples...")
+            print("\n>>Keeping both baseline and follow samples...")
         elif ans == "B":
-            print("Dropping follow...")
+            print("\n>>Dropping follow...")
             self.TWB_df = self.TWB_df[self.TWB_df.FOLLOW != "Follow 1"]
         else:
-            print("Dropping baseline...")
+            print("\n>>Dropping baseline...")
             self.TWB_df = self.TWB_df[self.TWB_df.FOLLOW != "Baseline"]
     
     def create_Phenos(self):
-        print("Creating phenotypes!")
-        print("calculating eGFR...")
+        print("\n>>Creating phenotypes!")
+        print("\n>>Calculating eGFR...")
         self.TWB_df["eGFR"] = self.TWB_df.progress_apply(lambda x: self.eGFR(x["SEX"],x["CREATININE"],x["AGE"]),axis=1)
-        print("Finish calculating eGFR, now grouping OPe...")
+        print("\n>>Finish calculating eGFR, now grouping OPe...")
         self.TWB_df["OPe"] = self.TWB_df.progress_apply(lambda x: self.OPe(x["T_SCORE"]),axis=1)
-        print("Finish grouping OPe, now grouping OP...")
+        print("\n>>Finish grouping OPe, now grouping OP...")
         self.TWB_df["OP"] = self.TWB_df.progress_apply(lambda x: self.OP(x["T_SCORE"]),axis=1)
-        print("Finish grouping OP, now grouping OA...")
-        self.TWB_df["OA"] = self.TWB_df.apply(lambda x: self.OA(x["ARTHRITIS"],x["ARTHRITIS_SELF"],x["ARTHRITIS_SELF_KIND"]),axis=1)
-        print("Finish grouping OA, now grouping eGFR setting cutoff at 60...")
+        print("\n>>Finish grouping OP, now grouping OA...")
+        self.TWB_df["OA"] = self.TWB_df.progress_apply(lambda x: self.OA(x["ARTHRITIS"],x["ARTHRITIS_SELF"],x["ARTHRITIS_SELF_KIND"]),axis=1)
+        print("\n>>Finish grouping OA, now grouping eGFR setting cutoff at 60...")
         self.TWB_df["eGFR_stage60"] = self.TWB_df["eGFR"].progress_apply(lambda x: np.NaN if math.isnan(x) == True else (2 if x < 60 else 1))
-        print("Finish grouping eGFR, now cleaning miALB and UCR...")
+        print("\n>>Finish grouping eGFR, now cleaning miALB and UCR...")
         self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace(',',''))
         self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace('<',''))
         self.TWB_df.MICROALB = self.TWB_df.MICROALB.progress_apply(lambda x: str(x).replace('>',''))
@@ -178,18 +195,18 @@ class TWBcleaning():
         self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.progress_apply(lambda x: str(x).replace('<',''))
         self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.progress_apply(lambda x: str(x).replace('>',''))
         self.TWB_df.CREATININE_URINE = self.TWB_df.CREATININE_URINE.astype(float)
-        print("Finish cleaning miALB and UCR, now calculating UACR...")
+        print("\n>>Finish cleaning miALB and UCR, now calculating UACR...")
         self.TWB_df["UACR"] = self.TWB_df.progress_apply(lambda x: self.UACR(x["MICROALB"],x["CREATININE_URINE"]),axis = 1)
-        print("Finish calculating UACR, now using KDIGO classifying CKD...")
+        print("\n>>Finish calculating UACR, now using KDIGO classifying CKD...")
         self.TWB_df["CKD_KDIGO"] = self.TWB_df.progress_apply(lambda x: self.CKD(x["eGFR_stage60"],x["UACR"]),axis = 1)
-        print("Finish classifying CKD, no classifying DN...")
+        print("\n>>Finish classifying CKD, now classifying DN...")
         self.TWB_df["DN"] = self.TWB_df.progress_apply(lambda x: self.DN(x["DIABETES_SELF"],x["CKD_KDIGO"]),axis = 1)
-        print("All phenotypes done!")
-        print("Dropping empty and duplicate IIDs...")
+        print("\n>>All phenotypes done!")
+        print("\n>>Dropping empty and duplicate IIDs...")
         self.TWB_df = self.TWB_df.sort_values('FOLLOW')
         self.TWB_df = self.TWB_df.dropna(subset='iid')
         self.TWB_df.drop_duplicates(subset="iid", keep="last", inplace = True)
-        self.pheno_df = self.TWB_df[["iid", "batch","FOLLOW","SEX","BMI","AGE","T_SCORE","OPe","OP","CREATININE","MICROALB","CREATININE_URINE","RENAL_FAILURE_SELF", "DIABETES_SELF","UACR", "eGFR_stage60", "CKD_KDIGO", "DN"]]
+        self.pheno_df = self.TWB_df[["iid", "batch","FOLLOW","SEX","BMI","AGE","T_SCORE","OPe","OP","OA","CREATININE","MICROALB","CREATININE_URINE","RENAL_FAILURE_SELF", "DIABETES_SELF","UACR", "eGFR_stage60", "CKD_KDIGO", "DN"]]
         self.TOCSV(self.pheno_df, self.filepath, 'Pheno.csv')
     
     def FAMindex(self):
@@ -199,55 +216,81 @@ class TWBcleaning():
     def update_FAM(self):
         while True:
             phenos = str(list(self.pheno_df.columns)[3:]).replace("]", "").replace("[", "").replace("'", "")
-            print(phenos)
-            PHENO = input("Which pheno do you want to update for your fam file: ")
+            print("\n"+phenos)
+            PHENO = input("\n>>Which pheno do you want to update for your fam file: ")
             if PHENO in self.pheno_df.columns:
                 pheno_for_fam = self.pheno_df[["iid", PHENO]]
                 pheno_for_fam.columns = ["IID","Pheno"]
                 self.fam_df = self.fam_df[["FID","IID","father","mother","sex"]]
                 self.fam_df = pd.merge(self.fam_df, pheno_for_fam, on = "IID", how = "left")
                 self.fam_df["Pheno"] = self.fam_df["Pheno"].fillna(-9).astype('int')
-                print("Updating phenotype.fam...")
+                print("\n>>Updating phenotype.fam file...")
                 self.TOTXT(self.fam_df, self.filepath, "combined.TWB1.TWB2.high.confidence.v3.fam",False)
                 break
-            print("Invalid phenotype!")
-        
+            print("\n>>Invalid phenotype!")
+    
+    def create_PHEs(self):
+        PHENO = input('\n>>Which pheno do you want to create for your phenotype.txt file\n(no ned to include quotation marks, e.g., OA, OP): ')
+        vals = [v.strip() for v in PHENO.split(',')]
+        vals.insert(0,"iid")
+        phenotxt = self.pheno_df[vals]
+        phenotxt["FID"] = phenotxt.iid
+        vals.insert(0,"FID")
+        phenotxt = phenotxt[vals]
+        phenotxt = phenotxt.rename({'iid':'IID'}, axis=1)
+        self.TOTXT(phenotxt, self.filepath, "phenotype.txt")
+    
     def create_COVs(self):
-        print("Extracting covariates from pheno_df...")
+        print("\n>>Extracting covariates from pheno_df...")
         self.cov_df = self.pheno_df[["iid","batch","SEX","BMI","AGE"]]
         self.cov_df.columns = ["IID","batch","SEX","BMI","AGE"]
         self.cov_df = pd.merge(self.index_df, self.cov_df, on = ["IID"], how = "left")
         self.cov_df = pd.merge(self.cov_df, self.pca10, on = ["FID","IID"], how = "left")
         self.cov_df.dropna(inplace=True)
-        print("Creating covariate.txt...")
+        print("\n>>Creating covariate.txt...")
         self.TOTXT(self.cov_df, self.filepath, "covariate.txt")
 
     def random_sampling(self):
-        print("Start random process...")
+        print("\n>>Start random process...")
         random.seed(10)
         keep_df = self.fam_df[~self.fam_df.IID.isin(self.remove_df.IID)]
         print(keep_df.Pheno.value_counts())
-        n_case = input("According to total sample size above, how many cases do you need to sample: ")
-        n_control = input("How many controls do you need to sample: ")
-        print("Sampling target set...")
+        n_case = input("\n>>According to total sample size above, how many cases do you need to sample: ")
+        n_control = input("\n>>How many controls do you need to sample: ")
+        print("\n>>Sampling target set...")
         targetcase = keep_df.IID[keep_df.Pheno==2].sample(n=int(n_case), random_state=1).tolist()
         targetcontrol = keep_df.IID[keep_df.Pheno==1].sample(n=int(n_control), random_state=1).tolist()
         targetID = []
         targetID.extend(targetcase)
         targetID.extend(targetcontrol)
         targetID_df = pd.DataFrame({"FID":targetID,"IID":targetID},columns=["FID","IID"])
-        print("Creating targetID.txt...")
+        print("\n>>Creating targetID.txt...")
         self.TOTXT(targetID_df, self.filepath, "targetID.txt")
-        print("Sampling base set...")
+        print("\n>>Sampling base set...")
         baseID = keep_df.IID[~keep_df.IID.isin(targetID)].tolist()
         baseID_df = pd.DataFrame({"FID":baseID,"IID":baseID},columns=["FID","IID"])
-        print("Creating baseID.txt...")
+        print("\n>>Creating baseID.txt...")
         self.TOTXT(baseID_df, self.filepath, "baseID.txt")
         
 def main():
     TWB20221202 = TWBcleaning("/Volumes/Untitled/TWB20221129/","/Volumes/Untitled/TWBGWAS_130K/","release_list_survey.csv","release_list_measure.csv","lab_info.csv",'combined.TWB1.TWB2.high.confidence.v3.kinship.txt','combined.TWB1.TWB2.high.confidence.v3.PCA.txt',"combined.TWB1.TWB2.high.confidence.v3.fam")
     TWB20221202.update_FAM()
-    TWB20221202.create_COVs()
-    TWB20221202.random_sampling()
+    YN = input("\n>>Do you want to create phenotype.txt for multiple phenos? (Y/N): ")
+    if YN == "Y":        
+        TWB20221202.create_PHEs()
+    else:
+        print("\n")
+    YN = input(">>Do you want to create covariate file? (Y/N): ")
+    if YN == "Y":
+        TWB20221202.create_COVs()
+    else:
+        print("\n")
+    YN = input(">>Do you need to sample file into target and base? (Y/N): ")
+    if YN == "Y":
+        TWB20221202.random_sampling()
+    else:
+        print("\n")
+    print(">>All code done!")
+
     
 if __name__ == "__main__": main()
