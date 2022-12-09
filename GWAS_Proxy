@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Thu Oct 13 01:37:45 2022
-
 @author: alyion
 """
 import pandas as pd
@@ -14,10 +13,10 @@ import pandas as pd
 
 def get_NO_GWAS_SNP(bim ,snp_list ,inpath ,filename):
     # GWAS QC後晶片上是否有TFBS snp的點
-    qc_gwas_snp =list(bim["snp"])
+    gwas_snp =list(bim["SNP"])
     # reverse dict look up查找TFBS snp是否存在於GWAS QC後晶片上，存在給index值，不存在給-1
     index_dict = {}
-    reverse_lookup = {x:i for i, x in enumerate(qc_gwas_snp)}
+    reverse_lookup = {x:i for i, x in enumerate(gwas_snp)}
     for i, x in enumerate(snp_list):
         index_dict[i] = reverse_lookup.get(x, -1)
     print(index_dict.values())
@@ -41,7 +40,7 @@ def get_GWAS_proxy(bim,inpath,filename,outname,inGWASname):
     proxy_list = list(SNiPA_df["Proxy"])
     # check if these proxy are in GWAS chip
     index_dict = {}
-    gwas_snp =list(bim["snp"])
+    gwas_snp =list(bim["SNP"])
     reverse_lookup = {x:i for i, x in enumerate(gwas_snp)}
     for i, x in enumerate(proxy_list):
         index_dict[i] = reverse_lookup.get(x, -1)
@@ -78,14 +77,15 @@ def get_GWAS_proxy(bim,inpath,filename,outname,inGWASname):
 #  compare GWAS & TFBS snps  #
 ##############################
 # 檔案讀取路徑
-inpath = "/Users/alyion/Desktop/TFBS_LSY/"
+inpath = "/Users/alyion/Desktop/OPSNPSET2/"
 # GWAS路徑
-GWASpath = "/Volumes/LSY_MD/GWAS/BaseGWAS/"
+GWASpath = "/Volumes/Untitled/"
 
 # 讀入bim, fam, bed檔
 #(bim, fam, bed) = read_plink(GWASpath + "combined.TWB1.TWB2.high.confidence.v2")
 #(bim_1, fam_1, bed_1) = read_plink(GWASpath + "GWASBASE")
-bim_1 = pd.read_csv(GWASpath + "GWASBASE")
+bim_1 = pd.read_csv(GWASpath + "combined.TWB1.TWB2.high.confidence.v3.bim", sep="\t")
+bim_1.columns = ["CHR","SNP","POS","BP","A1","A2"]
 #讀入TFBS snp串列
 snp_list = []
 path = inpath + '❖SNP_list.txt'
@@ -101,7 +101,7 @@ snp_list = [item for sublist in snp_list for item in sublist]
 
 
 #GWAS QC後晶片上是否有TFBS snp的點
-qcfilename = '❖SNPs_not_in_qc_GWAS.txt'
+qcfilename = '❖SNPs_not_in_OP_GWAS.txt'
 get_NO_GWAS_SNP(bim_1, snp_list, inpath, qcfilename)
 
 #############################
